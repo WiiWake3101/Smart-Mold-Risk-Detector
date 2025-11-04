@@ -28,6 +28,7 @@ TfLiteTensor* output = nullptr;
 
 void setup() {
   Serial.begin(115200);
+  Serial1.begin(9600);   // UART TX to ESP32
   while (!Serial);
 
   // Initialize I2C
@@ -87,6 +88,7 @@ void loop() {
   TfLiteStatus invoke_status = interpreter->Invoke();
   if (invoke_status != kTfLiteOk) {
     Serial.println("Invoke failed!");
+    Serial1.println("Invoke failed!");
     return;
   }
 
@@ -104,29 +106,37 @@ void loop() {
   const char* risk_labels[] = {"High", "Low", "Moderate"};
 
   // Print timestamp
-  Serial.print("Time: ");
-  Serial.print(rtc.hour());
-  Serial.print(":");
-  Serial.print(rtc.minute());
-  Serial.print(":");
-  Serial.print(rtc.second());
-  Serial.print(" | Date: ");
-  Serial.print(rtc.day());
-  Serial.print("/");
-  Serial.print(rtc.month());
-  Serial.print("/");
-  Serial.println(rtc.year());
+  Serial.print("Time: "); Serial1.print("Time: ");
+  Serial.print(rtc.hour()); Serial1.print(rtc.hour()); Serial.print(":"); Serial1.print(":");
+  Serial.print(rtc.minute()); Serial1.print(rtc.minute()); Serial.print(":"); Serial1.print(":");
+  Serial.print(rtc.second()); Serial1.print(rtc.second());
+  Serial.print(" | Date: "); Serial1.print(" | Date: ");
+  Serial.print(rtc.day()); Serial1.print(rtc.day()); Serial.print("/"); Serial1.print("/");
+  Serial.print(rtc.month()); Serial1.print(rtc.month()); Serial.print("/"); Serial1.print("/");
+  Serial.println(rtc.year()); Serial1.println(rtc.year());
 
   // Print sensor data
   Serial.print("Temperature: "); Serial.print(temperature); Serial.println(" °C");
+  Serial1.print("Temperature: "); Serial1.print(temperature); Serial1.println(" °C");
+
   Serial.print("Humidity: "); Serial.print(humidity); Serial.println(" %");
+  Serial1.print("Humidity: "); Serial1.print(humidity); Serial1.println(" %");
+
   Serial.print("Pressure: "); Serial.print(pressure); Serial.println(" kPa");
+  Serial1.print("Pressure: "); Serial1.print(pressure); Serial1.println(" kPa");
+
   Serial.print("Lux: "); Serial.print(lux); Serial.println(" lx");
+  Serial1.print("Lux: "); Serial1.print(lux); Serial1.println(" lx");
 
   // Print prediction
   Serial.print("Predicted Mold Risk Category: ");
   Serial.println(risk_labels[predicted_class]);
 
+  Serial1.print("Predicted Mold Risk Category: ");
+  Serial1.println(risk_labels[predicted_class]);
+
   Serial.println("----------------------");
+  Serial1.println("----------------------");
+
   delay(1000);
 }
