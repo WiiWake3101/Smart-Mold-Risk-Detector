@@ -1,0 +1,8 @@
+// WiFi credentials
+#define WIFI_SSID  "Airtel_Pranav"
+#define WIFI_PASSWORD  "smile@135"
+
+// Supabase configuration
+#define SUPABASE_URL  "https://zxcgfzubayoazzekqmyb.supabase.co"
+#define SUPABASE_KEY  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp4Y2dmenViYXlvYXp6ZWtxbXliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3NTg4NDAsImV4cCI6MjA4MDMzNDg0MH0.6MXNQTQoMVd27pwscaPnj8XSn9S97ZWXi6_QvHbeIPE"
+#define USER_ID  "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc"

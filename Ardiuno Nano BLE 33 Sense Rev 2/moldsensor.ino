@@ -1,4 +1,4 @@
-#include <uRTCLib.h>
+#include <RTClib.h>
 #include <Arduino_LPS22HB.h>
 #include <Arduino_HS300x.h>
 #include <Wire.h>
@@ -11,7 +11,7 @@
 #include "model_data.h"
 
 // RTC module (DS3231 on I2C, 0x68 address)
-uRTCLib rtc(0x68);
+RTC_DS3231 rtc;
 
 // Create VEML7700 object
 Adafruit_VEML7700 veml = Adafruit_VEML7700();
@@ -32,7 +32,37 @@ void setup() {
   while (!Serial);
 
   // Initialize I2C
-  URTCLIB_WIRE.begin();
+  Wire.begin();
+  
+  // Initialize RTC
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC!");
+    while (1);
+  }
+
+  // Always update RTC to current date/time when sketch is uploaded
+  // Set to December 11, 2025 (adjust this to current date when uploading)
+  Serial.println("Setting RTC to current date/time...");
+  rtc.adjust(DateTime(2025, 12, 11, 19, 20, 0));  // YYYY, MM, DD, HH, MM, SS
+  
+  // Alternative: Uncomment below to use compile time (will be upload time)
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+  // Print current time
+  DateTime now = rtc.now();
+  Serial.print("RTC Time: ");
+  Serial.print(now.year(), DEC);
+  Serial.print('-');
+  Serial.print(now.month(), DEC);
+  Serial.print('-');
+  Serial.print(now.day(), DEC);
+  Serial.print(" ");
+  Serial.print(now.hour(), DEC);
+  Serial.print(':');
+  Serial.print(now.minute(), DEC);
+  Serial.print(':');
+  Serial.print(now.second(), DEC);
+  Serial.println();
 
   // Initialize Humidity/Temp Sensor
   HS300x.begin();
@@ -70,21 +100,18 @@ void setup() {
 }
 
 void loop() {
-  rtc.refresh();  // Refresh RTC time registers
+  DateTime now = rtc.now();
 
-  // Read and round sensor values to 2 decimal points
   float temperature = roundf(HS300x.readTemperature(CELSIUS) * 100) / 100.0;
   float humidity = roundf(HS300x.readHumidity() * 100) / 100.0;
-  float pressure = roundf(BARO.readPressure() * 100) / 100.0; // kPa
+  float pressure = roundf(BARO.readPressure() * 100) / 100.0;
   float lux = roundf(veml.readLux() * 100) / 100.0;
 
-  // Prepare input for the model
   input->data.f[0] = temperature;
   input->data.f[1] = humidity;
   input->data.f[2] = lux;
   input->data.f[3] = pressure;
 
-  // Run inference
   TfLiteStatus invoke_status = interpreter->Invoke();
   if (invoke_status != kTfLiteOk) {
     Serial.println("Invoke failed!");
@@ -92,7 +119,6 @@ void loop() {
     return;
   }
 
-  // Get prediction (argmax)
   int predicted_class = 0;
   float max_score = output->data.f[0];
   for (int i = 1; i < output->dims->data[1]; ++i) {
@@ -101,42 +127,19 @@ void loop() {
       predicted_class = i;
     }
   }
-
-  // Map class index to label: 0=High, 1=Low, 2=Moderate
   const char* risk_labels[] = {"High", "Low", "Moderate"};
 
-  // Print timestamp
-  Serial.print("Time: "); Serial1.print("Time: ");
-  Serial.print(rtc.hour()); Serial1.print(rtc.hour()); Serial.print(":"); Serial1.print(":");
-  Serial.print(rtc.minute()); Serial1.print(rtc.minute()); Serial.print(":"); Serial1.print(":");
-  Serial.print(rtc.second()); Serial1.print(rtc.second());
-  Serial.print(" | Date: "); Serial1.print(" | Date: ");
-  Serial.print(rtc.day()); Serial1.print(rtc.day()); Serial.print("/"); Serial1.print("/");
-  Serial.print(rtc.month()); Serial1.print(rtc.month()); Serial.print("/"); Serial1.print("/");
-  Serial.println(rtc.year()); Serial1.println(rtc.year());
+  // Format as CSV: date,time,temperature,humidity,pressure,light,mold_risk
+  char csv[128];
+  snprintf(csv, sizeof(csv), "%02d/%02d/%04d,%02d:%02d:%02d,%.2f,%.2f,%.2f,%.2f,%s",
+    now.day(), now.month(), now.year(),
+    now.hour(), now.minute(), now.second(),
+    temperature, humidity, pressure, lux,
+    risk_labels[predicted_class]
+  );
 
-  // Print sensor data
-  Serial.print("Temperature: "); Serial.print(temperature); Serial.println(" °C");
-  Serial1.print("Temperature: "); Serial1.print(temperature); Serial1.println(" °C");
-
-  Serial.print("Humidity: "); Serial.print(humidity); Serial.println(" %");
-  Serial1.print("Humidity: "); Serial1.print(humidity); Serial1.println(" %");
-
-  Serial.print("Pressure: "); Serial.print(pressure); Serial.println(" kPa");
-  Serial1.print("Pressure: "); Serial1.print(pressure); Serial1.println(" kPa");
-
-  Serial.print("Lux: "); Serial.print(lux); Serial.println(" lx");
-  Serial1.print("Lux: "); Serial1.print(lux); Serial1.println(" lx");
-
-  // Print prediction
-  Serial.print("Predicted Mold Risk Category: ");
-  Serial.println(risk_labels[predicted_class]);
-
-  Serial1.print("Predicted Mold Risk Category: ");
-  Serial1.println(risk_labels[predicted_class]);
-
-  Serial.println("----------------------");
-  Serial1.println("----------------------");
+  Serial.println(csv);    // Print to Serial Monitor
+  Serial1.println(csv);   // Send to ESP32
 
   delay(1000);
 }
