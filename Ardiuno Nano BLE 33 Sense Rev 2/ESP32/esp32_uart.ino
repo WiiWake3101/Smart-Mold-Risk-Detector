@@ -6,6 +6,12 @@
 #define RXD2 16
 #define TXD2 17
 
+// Supabase upload interval (1 minute = 60000 ms)
+#define SUPABASE_INTERVAL 60000
+unsigned long lastSupabaseUpload = 0;
+String latestData = "";
+bool firstUploadDone = false;
+
 void setup() {
   Serial.begin(115200);
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
@@ -26,7 +32,7 @@ void sendToSupabase(String data) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", SUPABASE_KEY);
     http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
-    http.addHeader("Prefer", "return=minimal");
+    http.addHeader("Prefer", "return=representation");  // Changed to see actual response
 
     // Parse 7 values from CSV
     String values[7];
@@ -120,14 +126,16 @@ void sendToSupabase(String data) {
     int code = http.POST(payload);
     Serial.print("HTTP Response Code: "); Serial.println(code);
     
-    // Show response body ONLY on error
-    if (code < 200 || code >= 300) {
-      String response = http.getString();
-      Serial.println("=== ERROR RESPONSE ===");
-      Serial.println(response);
-      Serial.println("======================");
-    } else {
+    // Always show response body for debugging
+    String response = http.getString();
+    Serial.println("=== RESPONSE BODY ===");
+    Serial.println(response.length() > 0 ? response : "(empty)");
+    Serial.println("=====================");
+    
+    if (code >= 200 && code < 300) {
       Serial.println("SUCCESS: Data sent to Supabase!");
+    } else {
+      Serial.println("ERROR: Request failed!");
     }
     
     http.end();
@@ -137,13 +145,34 @@ void sendToSupabase(String data) {
 }
 
 void loop() {
+  // Read data from Serial2 whenever available
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');
     data.trim();
     if (data.length() > 0) {
       Serial.println("Received Data: " + data);
-      sendToSupabase(data);
+      latestData = data;
     }
   }
+
+  // Upload logic: first upload immediately when data arrives, then every minute
+  unsigned long currentMillis = millis();
+  
+  if (latestData.length() > 0) {
+    // First upload: send immediately when we have data
+    if (!firstUploadDone) {
+      Serial.println("=== FIRST UPLOAD ===");
+      sendToSupabase(latestData);
+      lastSupabaseUpload = currentMillis;
+      firstUploadDone = true;
+    }
+    // Subsequent uploads: every 1 minute
+    else if (currentMillis - lastSupabaseUpload >= SUPABASE_INTERVAL) {
+      Serial.println("=== 1 MINUTE INTERVAL UPLOAD ===");
+      sendToSupabase(latestData);
+      lastSupabaseUpload = currentMillis;
+    }
+  }
+
   delay(100);
 }
