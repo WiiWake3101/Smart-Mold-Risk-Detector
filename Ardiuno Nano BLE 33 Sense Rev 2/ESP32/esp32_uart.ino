@@ -3,7 +3,7 @@
 // Device credentials
 #define USER_ID       "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc"
 #define CELLULAR_APN  "airtelgprs.com"
-#define VERCEL_URL    "https://your-app.vercel.app"  // Update after deployment
+#define VERCEL_URL    "https://stachyfind-server.vercel.app"  // Update after deployment
 
 // Arduino Nano sensor UART
 #define RXD2 16
