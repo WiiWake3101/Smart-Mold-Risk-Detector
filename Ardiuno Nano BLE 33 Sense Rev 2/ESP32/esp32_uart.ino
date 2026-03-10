@@ -119,17 +119,27 @@ void sendToSupabase(String data) {
     return;
   }
 
-  // Parse 7 values from CSV
+  // Strip stray carriage-returns / newlines that survive readStringUntil
+  data.replace("\r", "");
+  data.replace("\n", "");
+  data.trim();
+
+  // Debug: print exactly what we received before parsing
+  Serial.print("sendToSupabase raw (len=");
+  Serial.print(data.length());
+  Serial.print("): '");
+  Serial.print(data);
+  Serial.println("'");
+
+  // Parse 7 comma-separated values using strtok (more reliable than indexOf loop)
   String values[7];
-  int idx = 0, lastIdx = 0, commaIdx = 0;
-  while (commaIdx != -1 && idx < 7) {
-    commaIdx = data.indexOf(',', lastIdx);
-    if (commaIdx != -1)
-      values[idx] = data.substring(lastIdx, commaIdx);
-    else
-      values[idx] = data.substring(lastIdx);
-    lastIdx = commaIdx + 1;
-    idx++;
+  int idx = 0;
+  char buf[200];
+  data.toCharArray(buf, sizeof(buf));
+  char* token = strtok(buf, ",");
+  while (token != NULL && idx < 7) {
+    values[idx++] = String(token);
+    token = strtok(NULL, ",");
   }
 
   // Debug: Print all values
@@ -139,8 +149,8 @@ void sendToSupabase(String data) {
     Serial.print(values[i].length()); Serial.println(")");
   }
 
-  // Validate we got 7 values
-  if (idx != 7) {
+  // Validate we got all 7 values
+  if (idx < 7) {
     Serial.print("ERROR: Only got "); Serial.print(idx);
     Serial.println(" values, expected 7!");
     return;
@@ -237,10 +247,20 @@ void loop() {
   // Read data from Serial2 whenever available
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');
+    data.replace("\r", "");
     data.trim();
-    if (data.length() > 0) {
-      Serial.println("Received Data: " + data);
-      latestData = data;
+    if (data.length() > 20) {
+      // Validate CSV has exactly 6 commas (7 fields) before storing
+      int commaCount = 0;
+      for (int i = 0; i < (int)data.length(); i++) {
+        if (data[i] == ',') commaCount++;
+      }
+      if (commaCount == 6) {
+        Serial.println("Received Data: " + data);
+        latestData = data;
+      } else {
+        Serial.println("WARNING: Ignoring malformed CSV (commas=" + String(commaCount) + "): " + data);
+      }
     }
   }
 
