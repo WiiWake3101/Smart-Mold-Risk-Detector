@@ -1,9 +1,8 @@
-#include <math.h>
 
 // Device credentials
 String user_id    = "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc";
 const char apn[]  = "airtelgprs.com";
-String vercel_api = "https://stachyfind-server.vercel.app/api/index";
+String vercel_api = "https://stachyfind-server.vercel.app/api/sensors";
 
 // Arduino Nano sensor UART
 #define RXD2 16
@@ -15,17 +14,6 @@ String vercel_api = "https://stachyfind-server.vercel.app/api/index";
 HardwareSerial A7670_Serial(1);
 
 bool is4GConnected = false;
-
-bool hasSensorFailure(float temperature, float humidity, float pressure, float lux) {
-  if (!isfinite(temperature) || !isfinite(humidity) || !isfinite(pressure) || !isfinite(lux)) {
-    return true;
-  }
-  if (temperature < -40.0f || temperature > 125.0f) return true;
-  if (humidity < 0.0f    || humidity > 100.0f)     return true;
-  if (pressure < 10.0f   || pressure > 1200.0f)    return true;
-  if (lux < 0.0f         || lux > 120000.0f)       return true;
-  return false;
-}
 
 // AT Command Helper
 String sendATCommand(String command, unsigned long timeout = 1000) {
@@ -65,17 +53,39 @@ int waitForHTTPAction(unsigned long timeout = 15000) {
       response += c;
       Serial.write(c);
     }
-    if (response.indexOf("+HTTPACTION:") != -1) {
+    int idx = response.indexOf("+HTTPACTION:");
+    if (idx != -1) {
       // Format: +HTTPACTION: <method>,<status>,<datalen>
-      int idx = response.indexOf("+HTTPACTION:");
-      int firstComma = response.indexOf(',', idx);
+      int firstComma  = response.indexOf(',', idx);
       int secondComma = response.indexOf(',', firstComma + 1);
       if (firstComma != -1 && secondComma != -1) {
         return response.substring(firstComma + 1, secondComma).toInt();
       }
     }
   }
+  Serial.println("ERROR: Timed out waiting for +HTTPACTION");
   return -1;
+}
+
+// Read and print the HTTP response body for debugging
+void readHTTPResponse() {
+  String resp = sendATCommand("AT+HTTPREAD=0,512", 5000);
+  Serial.println("Server response body: " + resp);
+}
+
+// Wait for modem to output the DOWNLOAD prompt after AT+HTTPDATA
+bool waitForDownloadPrompt(unsigned long timeout = 5000) {
+  unsigned long start = millis();
+  String buf = "";
+  while (millis() - start < timeout) {
+    while (A7670_Serial.available()) {
+      char c = A7670_Serial.read();
+      buf += c;
+    }
+    if (buf.indexOf("DOWNLOAD") != -1) return true;
+  }
+  Serial.println("WARNING: DOWNLOAD prompt not received");
+  return false;
 }
 
 bool init4GConnection() {
@@ -224,10 +234,18 @@ void sendToSupabase(String data) {
   String url = vercel_api + "?type=upload_sensor";
   sendATCommand("AT+HTTPPARA=\"URL\",\"" + url + "\"", 2000);
   sendATCommand("AT+HTTPPARA=\"REDIR\",1", 2000);
-  sendATCommand("AT+HTTPPARA=\"USERDATA\",\"Content-Type: application/json\"", 2000);
+  sendATCommand("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 2000);
 
-  sendATCommand("AT+HTTPDATA=" + String(payload.length()) + ",10000", 2000);
-  delay(1000);
+  // Send AT+HTTPDATA directly so the "DOWNLOAD" prompt is NOT consumed by sendATCommand
+  while (A7670_Serial.available()) A7670_Serial.read();  // flush stale bytes
+  A7670_Serial.println("AT+HTTPDATA=" + String(payload.length()) + ",10000");
+  Serial.println("CMD: AT+HTTPDATA=" + String(payload.length()) + ",10000");
+  if (!waitForDownloadPrompt()) {
+    Serial.println("ERROR: Aborting upload — DOWNLOAD prompt never arrived.");
+    sendATCommand("AT+HTTPTERM", 2000);
+    return;
+  }
+  Serial.println("DOWNLOAD prompt received. Sending payload...");
   A7670_Serial.print(payload);
   delay(2000);
   sendATCommand("AT+HTTPACTION=1", 2000);
@@ -236,9 +254,11 @@ void sendToSupabase(String data) {
     Serial.println("SUCCESS: Data sent to Supabase!");
   } else if (httpStatus == 308 || httpStatus == 301 || httpStatus == 302) {
     Serial.println("ERROR: Server returned redirect (" + String(httpStatus) + "). Check vercel_api URL or update modem firmware.");
+    readHTTPResponse();
   } else {
     Serial.print("ERROR: Upload failed. HTTP Status: ");
     Serial.println(httpStatus);
+    readHTTPResponse();
   }
 
   sendATCommand("AT+HTTPTERM", 2000);
