@@ -8,6 +8,7 @@
 #include <tensorflow/lite/micro/all_ops_resolver.h>
 #include <tensorflow/lite/schema/schema_generated.h>
 #include <Adafruit_VEML7700.h>
+#include <math.h>
 #include "model_data.h"
 
 // RTC module (DS3231 on I2C, 0x68 address)
@@ -26,6 +27,20 @@ tflite::MicroInterpreter* interpreter = nullptr;
 TfLiteTensor* input = nullptr;
 TfLiteTensor* output = nullptr;
 
+bool hasSensorFailure(float temperature, float humidity, float pressure, float lux) {
+  if (!isfinite(temperature) || !isfinite(humidity) || !isfinite(pressure) || !isfinite(lux)) {
+    return true;
+  }
+
+  // Basic physical sanity checks to catch disconnected or malfunctioning sensors.
+  if (temperature < -40.0f || temperature > 125.0f) return true;
+  if (humidity < 0.0f || humidity > 100.0f) return true;
+  if (pressure < 10.0f || pressure > 1200.0f) return true;
+  if (lux < 0.0f || lux > 120000.0f) return true;
+
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600);   // UART TX to ESP32
@@ -40,13 +55,13 @@ void setup() {
     while (1);
   }
 
-  // Always update RTC to current date/time when sketch is uploaded
-  // Set to December 11, 2025 (adjust this to current date when uploading)
-  Serial.println("Setting RTC to current date/time...");
-  rtc.adjust(DateTime(2025, 12, 11, 19, 20, 0));  // YYYY, MM, DD, HH, MM, SS
-  
-  // Alternative: Uncomment below to use compile time (will be upload time)
-  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  // Snippet: set RTC from system (compile/upload) time after initialization.
+  // DateTime systemTime = DateTime(F(__DATE__), F(__TIME__));
+  // rtc.adjust(systemTime);
+
+  // Set RTC to the provided current time.
+  Serial.println("Setting RTC to provided current time...");
+  rtc.adjust(DateTime(2026, 3, 12, 20, 7, 0));
 
   // Print current time
   DateTime now = rtc.now();
@@ -107,27 +122,34 @@ void loop() {
   float pressure = roundf(BARO.readPressure() * 100) / 100.0;
   float lux = roundf(veml.readLux() * 100) / 100.0;
 
-  input->data.f[0] = temperature;
-  input->data.f[1] = humidity;
-  input->data.f[2] = lux;
-  input->data.f[3] = pressure;
+  const char* mold_risk = "Critical";
+  const char* risk_labels[] = {"High", "Low", "Moderate"};
 
-  TfLiteStatus invoke_status = interpreter->Invoke();
-  if (invoke_status != kTfLiteOk) {
-    Serial.println("Invoke failed!");
-    Serial1.println("Invoke failed!");
-    return;
-  }
+  bool sensor_failure = hasSensorFailure(temperature, humidity, pressure, lux);
+  if (sensor_failure) {
+    Serial.println("Sensor failure detected. Reporting mold risk as Critical.");
+  } else {
+    input->data.f[0] = temperature;
+    input->data.f[1] = humidity;
+    input->data.f[2] = lux;
+    input->data.f[3] = pressure;
 
-  int predicted_class = 0;
-  float max_score = output->data.f[0];
-  for (int i = 1; i < output->dims->data[1]; ++i) {
-    if (output->data.f[i] > max_score) {
-      max_score = output->data.f[i];
-      predicted_class = i;
+    TfLiteStatus invoke_status = interpreter->Invoke();
+    if (invoke_status != kTfLiteOk) {
+      Serial.println("Invoke failed! Reporting mold risk as Critical.");
+      Serial1.println("Invoke failed! Reporting mold risk as Critical.");
+    } else {
+      int predicted_class = 0;
+      float max_score = output->data.f[0];
+      for (int i = 1; i < output->dims->data[1]; ++i) {
+        if (output->data.f[i] > max_score) {
+          max_score = output->data.f[i];
+          predicted_class = i;
+        }
+      }
+      mold_risk = risk_labels[predicted_class];
     }
   }
-  const char* risk_labels[] = {"High", "Low", "Moderate"};
 
   // Format as CSV: date,time,temperature,humidity,pressure,light,mold_risk
   char csv[128];
@@ -135,7 +157,7 @@ void loop() {
     now.day(), now.month(), now.year(),
     now.hour(), now.minute(), now.second(),
     temperature, humidity, pressure, lux,
-    risk_labels[predicted_class]
+    mold_risk
   );
 
   Serial.println(csv);    // Print to Serial Monitor

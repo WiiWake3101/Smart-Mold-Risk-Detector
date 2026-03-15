@@ -1,9 +1,9 @@
-#include <ArduinoJson.h>
+#include <math.h>
 
 // Device credentials
-#define USER_ID       "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc"
-#define CELLULAR_APN  "airtelgprs.com"
-#define VERCEL_URL    "https://stachyfind-server.vercel.app"  // Update after deployment
+String user_id    = "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc";
+const char apn[]  = "airtelgprs.com";
+String vercel_api = "https://stachyfind-server.vercel.app/api/index";
 
 // Arduino Nano sensor UART
 #define RXD2 16
@@ -14,12 +14,18 @@
 #define A7670_TX 21
 HardwareSerial A7670_Serial(1);
 
-// Supabase upload interval (1 minute = 60000 ms)
-#define SUPABASE_INTERVAL 60000
-unsigned long lastSupabaseUpload = 0;
-String latestData = "";
-bool firstUploadDone = false;
 bool is4GConnected = false;
+
+bool hasSensorFailure(float temperature, float humidity, float pressure, float lux) {
+  if (!isfinite(temperature) || !isfinite(humidity) || !isfinite(pressure) || !isfinite(lux)) {
+    return true;
+  }
+  if (temperature < -40.0f || temperature > 125.0f) return true;
+  if (humidity < 0.0f    || humidity > 100.0f)     return true;
+  if (pressure < 10.0f   || pressure > 1200.0f)    return true;
+  if (lux < 0.0f         || lux > 120000.0f)       return true;
+  return false;
+}
 
 // AT Command Helper
 String sendATCommand(String command, unsigned long timeout = 1000) {
@@ -97,7 +103,7 @@ bool init4GConnection() {
   }
 
   sendATCommand("AT+CSQ", 1000);
-  sendATCommand("AT+CGDCONT=1,\"IP\",\"" + String(CELLULAR_APN) + "\"", 2000);
+  sendATCommand("AT+CGDCONT=1,\"IP\",\"" + String(apn) + "\"", 2000);
   sendATCommand("AT+CGATT=1", 3000);
   sendATCommand("AT+CGACT=1,1", 5000);
 
@@ -174,43 +180,50 @@ void sendToSupabase(String data) {
     Serial.println("Date conversion failed, using original: " + originalDate);
   }
 
-  // Build JSON
-  StaticJsonDocument<300> doc;
-  doc["UID"] = USER_ID;
-  doc["date"] = convertedDate;
-  doc["time"] = values[1];
-  doc["temperature"] = values[2].toFloat();
-  doc["humidity"] = values[3].toFloat();
-  doc["pressure"] = values[4].toFloat();
-  doc["light"] = values[5].toInt();
+  float temperature = values[2].toFloat();
+  float humidity    = values[3].toFloat();
+  float pressure    = values[4].toFloat();
+  float lux         = values[5].toFloat();
 
   // Validate and normalize mold_risk_category
   String category = values[6];
   category.trim();
   category.toLowerCase();
   if (category == "moderate") category = "medium";
+
+  if (hasSensorFailure(temperature, humidity, pressure, lux)) {
+    Serial.println("Sensor failure detected on ESP32 side. Forcing mold_risk_category to critical.");
+    category = "critical";
+  }
+
   if (category != "low" && category != "medium" && category != "high" && category != "critical") {
     Serial.print("ERROR: Invalid mold_risk_category '");
     Serial.print(values[6]);
     Serial.println("'. Must be: low, moderate/medium, high, or critical");
     return;
   }
-  doc["mold_risk_category"] = category;
 
-  String payload;
-  serializeJson(doc, payload);
-  Serial.println("=== JSON PAYLOAD ===");
-  Serial.println(payload);
-  Serial.println("====================");
+  // Build JSON payload
+  String payload = "{\"UID\":\"" + user_id + "\",";
+  payload += "\"date\":\"" + convertedDate + "\",";
+  payload += "\"time\":\"" + values[1] + "\",";
+  payload += "\"temperature\":" + String(temperature) + ",";
+  payload += "\"humidity\":" + String(humidity) + ",";
+  payload += "\"pressure\":" + String(pressure) + ",";
+  payload += "\"light\":" + String((int)lux) + ",";
+  payload += "\"mold_risk_category\":\"" + category + "\"}";
 
-  // Send via A7670 HTTP POST to Vercel
   Serial.println("\n=== Uploading via Vercel ===");
+  Serial.println("Payload: " + payload);
+
   sendATCommand("AT+HTTPTERM", 2000);
   delay(1000);
   sendATCommand("AT+HTTPINIT", 2000);
+  sendATCommand("AT+HTTPSSL=1", 2000);
 
-  String url = String(VERCEL_URL) + "/api/index?type=upload_sensor";
+  String url = vercel_api + "?type=upload_sensor";
   sendATCommand("AT+HTTPPARA=\"URL\",\"" + url + "\"", 2000);
+  sendATCommand("AT+HTTPPARA=\"REDIR\",1", 2000);
   sendATCommand("AT+HTTPPARA=\"USERDATA\",\"Content-Type: application/json\"", 2000);
 
   sendATCommand("AT+HTTPDATA=" + String(payload.length()) + ",10000", 2000);
@@ -218,10 +231,11 @@ void sendToSupabase(String data) {
   A7670_Serial.print(payload);
   delay(2000);
   sendATCommand("AT+HTTPACTION=1", 2000);
-
   int httpStatus = waitForHTTPAction(15000);
   if (httpStatus == 200 || httpStatus == 201) {
     Serial.println("SUCCESS: Data sent to Supabase!");
+  } else if (httpStatus == 308 || httpStatus == 301 || httpStatus == 302) {
+    Serial.println("ERROR: Server returned redirect (" + String(httpStatus) + "). Check vercel_api URL or update modem firmware.");
   } else {
     Serial.print("ERROR: Upload failed. HTTP Status: ");
     Serial.println(httpStatus);
@@ -244,42 +258,23 @@ void setup() {
 }
 
 void loop() {
-  // Read data from Serial2 whenever available
   if (Serial2.available()) {
     String data = Serial2.readStringUntil('\n');
     data.replace("\r", "");
     data.trim();
     if (data.length() > 20) {
-      // Validate CSV has exactly 6 commas (7 fields) before storing
+      // Validate CSV has exactly 6 commas (7 fields)
       int commaCount = 0;
       for (int i = 0; i < (int)data.length(); i++) {
         if (data[i] == ',') commaCount++;
       }
       if (commaCount == 6) {
         Serial.println("Received Data: " + data);
-        latestData = data;
+        Serial.println("=== UPLOADING ===");
+        sendToSupabase(data);
       } else {
         Serial.println("WARNING: Ignoring malformed CSV (commas=" + String(commaCount) + "): " + data);
       }
-    }
-  }
-
-  // Upload logic: first upload immediately when data arrives, then every minute
-  unsigned long currentMillis = millis();
-
-  if (latestData.length() > 0) {
-    // First upload: send immediately when we have data
-    if (!firstUploadDone) {
-      Serial.println("=== FIRST UPLOAD ===");
-      sendToSupabase(latestData);
-      lastSupabaseUpload = currentMillis;
-      firstUploadDone = true;
-    }
-    // Subsequent uploads: every 1 minute
-    else if (currentMillis - lastSupabaseUpload >= SUPABASE_INTERVAL) {
-      Serial.println("=== 1 MINUTE INTERVAL UPLOAD ===");
-      sendToSupabase(latestData);
-      lastSupabaseUpload = currentMillis;
     }
   }
 
