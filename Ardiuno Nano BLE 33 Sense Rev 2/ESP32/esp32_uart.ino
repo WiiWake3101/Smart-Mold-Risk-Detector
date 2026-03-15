@@ -1,8 +1,7 @@
-
 // Device credentials
 String user_id    = "cd1ab19b-80fe-4807-a445-8f3b6e24bfdc";
 const char apn[]  = "airtelgprs.com";
-String vercel_api = "https://stachyfind-server.vercel.app/api/sensors";
+String vercel_api = "https://stachyfind-server.vercel.app/api/sensor";
 
 // Arduino Nano sensor UART
 #define RXD2 16
@@ -14,6 +13,16 @@ String vercel_api = "https://stachyfind-server.vercel.app/api/sensors";
 HardwareSerial A7670_Serial(1);
 
 bool is4GConnected = false;
+
+bool hasSensorFailure(float temperature, float humidity, float pressure, float lux) {
+  // NaN check: NaN != NaN is always true under IEEE 754 (no <math.h> needed)
+  if (temperature != temperature || humidity != humidity || pressure != pressure || lux != lux) return true;
+  if (temperature < -40.0f || temperature > 125.0f)  return true;
+  if (humidity    <   0.0f || humidity    > 100.0f)   return true;
+  if (pressure    <  10.0f || pressure    > 1200.0f)  return true;
+  if (lux         <   0.0f || lux         > 120000.0f) return true;
+  return false;
+}
 
 // AT Command Helper
 String sendATCommand(String command, unsigned long timeout = 1000) {
@@ -201,7 +210,8 @@ void sendToSupabase(String data) {
   category.toLowerCase();
   if (category == "moderate") category = "medium";
 
-  if (hasSensorFailure(temperature, humidity, pressure, lux)) {
+  bool sensorFailed = hasSensorFailure(temperature, humidity, pressure, lux);
+  if (sensorFailed) {
     Serial.println("Sensor failure detected on ESP32 side. Forcing mold_risk_category to critical.");
     category = "critical";
   }
@@ -221,7 +231,8 @@ void sendToSupabase(String data) {
   payload += "\"humidity\":" + String(humidity) + ",";
   payload += "\"pressure\":" + String(pressure) + ",";
   payload += "\"light\":" + String((int)lux) + ",";
-  payload += "\"mold_risk_category\":\"" + category + "\"}";
+  payload += "\"mold_risk_category\":\"" + category + "\",";
+  payload += "\"sensor_failure\":" + String(sensorFailed ? "true" : "false") + "}";
 
   Serial.println("\n=== Uploading via Vercel ===");
   Serial.println("Payload: " + payload);
