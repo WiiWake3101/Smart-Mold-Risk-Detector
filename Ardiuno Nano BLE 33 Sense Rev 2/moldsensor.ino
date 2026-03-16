@@ -118,9 +118,28 @@ void loop() {
   DateTime now = rtc.now();
 
   float temperature = roundf(HS300x.readTemperature(CELSIUS) * 100) / 100.0;
+  if (!isfinite(temperature) || temperature < -40.0f || temperature > 125.0f) {
+    Serial.println("WARNING: Temperature read failed, defaulting to 0.");
+    temperature = 0.0f;
+  }
+
   float humidity = roundf(HS300x.readHumidity() * 100) / 100.0;
+  if (!isfinite(humidity) || humidity < 0.0f || humidity > 100.0f) {
+    Serial.println("WARNING: Humidity read failed, defaulting to 0.");
+    humidity = 0.0f;
+  }
+
   float pressure = roundf(BARO.readPressure() * 100) / 100.0;
+  if (!isfinite(pressure) || pressure < 10.0f || pressure > 1200.0f) {
+    Serial.println("WARNING: Pressure read failed, defaulting to 0.");
+    pressure = 0.0f;
+  }
+
   float lux = roundf(veml.readLux() * 100) / 100.0;
+  if (!isfinite(lux) || lux < 0.0f || lux > 120000.0f) {
+    Serial.println("WARNING: Lux read failed, defaulting to 0.");
+    lux = 0.0f;
+  }
 
   const char* mold_risk = "Critical";
   const char* risk_labels[] = {"High", "Low", "Moderate"};
